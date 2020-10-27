@@ -19,6 +19,7 @@
 #include "message_proto.h"
 #include "error_handling.h"
 #include "utility.h"
+#include "thread"
 
 // Barebone variables
 int       server_socket;
@@ -108,6 +109,7 @@ void ProcessInputFromSocket(int socket){
 
     // Zero bytes read => client disconnected, remove assigned socket.
     if (bytes_read == 0){
+        close(socket);
         RemoveSocket(socket);
         return; 
     }
@@ -166,6 +168,22 @@ void HandleMessageQueue(){
     }
 }
 
+void ProcessKeyboardInput(){
+    std::cout << "Server input available" << std::endl;
+    std::string cmd;
+    std::cin >> cmd;
+
+    while (true){
+        if (cmd == "end"){
+            close(server_socket);
+            std::terminate();
+        }
+        else {
+            Out("Command not recognized"); Out("\n");
+        }
+    }
+}
+
 int main(int argc, char* argv[]){
     message_proto a("Tom", "Hi");
     std::cout << "---------------------Chat Server---------------------" << std::endl;
@@ -176,6 +194,7 @@ int main(int argc, char* argv[]){
     std::cout << "Using server port: " << server_port << std::endl;
 
     Init(server_port);
+    std::thread input(&ProcessKeyboardInput);
     while (true){
         PerformMainCycle();
         HandleMessageQueue();

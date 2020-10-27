@@ -65,6 +65,7 @@ void RunOutputRoutine(int sock){
         }
         else if (bytes_recv == 0){
             std::cout << "Server closed connection" << std::endl;
+            close(sock);
             std::terminate();
             break;
         }
