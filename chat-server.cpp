@@ -3,6 +3,7 @@
 #include <queue>
 #include <vector>
 #include <list>
+#include <unordered_map>
 //
 #include <unistd.h>
 #include <errno.h>
@@ -15,9 +16,11 @@
 #include <sys/wait.h>
 #include <signal.h>
 #include <poll.h>
+#include "message_proto.h"
+#include "error_handling.h"
+#include "utility.h"
 
 // Barebone variables
-int       last_code;
 int       server_socket;
 addrinfo  *server_info;
 addrinfo  hints;
@@ -28,24 +31,10 @@ fd_set    main_socket_set_read_tmp;
 int       max_socket = server_socket;
 char      iobuffer[1024];
 
-std::queue<std::string> awating_messages;
 
-// Does error messaging, includes last UNIX error code.
-static void ErrorOut(int line, std::string file){
-    std::cout << "An error occured, line: " << line << ". File: " << file << std::endl;
-    std::cout << "Error code: " << errno << std::endl;
-    raise(SIGTRAP);
-}
-
-static void ErrorOut_Custom(int line, std::string file, int code){
-    std::cout << "An error occured, line: " << line << ". File: " << file << std::endl;
-    std::cout << "Error code: " << code << std::endl;
-    raise(SIGTRAP);
-}
-
-#define ASSERT(action)\
-    last_code = (action);\
-    if (last_code == -1) ErrorOut(__LINE__, __FILE__);
+std::queue<message_proto> awating_messages;
+std::queue<int> awaiting_messages_senders;
+std::unordered_map<int, std::string> socket_to_user_binding;
 
 // Initialize server
 static void Init(std::string port){
@@ -112,19 +101,22 @@ static void HandleServerSocket(){
 }
 
 void ProcessInputFromSocket(int socket){
+    message_proto new_msg;
     int bytes_read = 0;
-    bytes_read = read(socket, iobuffer, 1024);
+    bytes_read = read(socket, &new_msg, sizeof new_msg);
     ASSERT(bytes_read);
 
     // Zero bytes read => client disconnected, remove assigned socket.
     if (bytes_read == 0){
         RemoveSocket(socket);
-        return;
+        return; 
     }
-    std::string msg(static_cast<const char*>(iobuffer), bytes_read);
-    std::cout << "Socket " << socket << " sent a message (length: )" << bytes_read <<
-     ": \n" << msg << std::endl;
-    awating_messages.push(msg);
+    std::cout << "Socket " << socket << " sent a message (length: " << bytes_read
+    << ")" << ": \nName:";
+    Out(new_msg.get_name().c_str()); Out("\n");
+    Out(new_msg.get_msg().c_str()); Out("\n");
+    awaiting_messages_senders.push(socket); 
+    awating_messages.push(new_msg);
 }
 
 static void PerformMainCycle(){
@@ -152,23 +144,35 @@ void SendMsgToAll(std::string& msg){
     }
 }
 
+void SendMsgToAll(message_proto& msg, int sender_socket){
+    main_socket_set_read_tmp = main_socket_set_read;
+    timeval wait {0, 10000}; // Wait 0.01 second 
+    ASSERT(select(max_socket + 1, NULL, &main_socket_set_read_tmp, NULL, &wait));
+    for (int current_socket = 0; current_socket <= max_socket; current_socket++){
+        if (FD_ISSET(current_socket, &main_socket_set_read_tmp) &&
+            current_socket != sender_socket){
+            send(current_socket, &msg, sizeof msg, NULL);
+        }
+    }
+}
+
 void HandleMessageQueue(){
     while (awating_messages.size() > 0){
-        std::string msg = awating_messages.back();
+        message_proto msg = awating_messages.back();
         awating_messages.pop();
-        SendMsgToAll(msg);
+        int sender_socket = awaiting_messages_senders.back();
+        awaiting_messages_senders.pop();
+        SendMsgToAll(msg, sender_socket);
     }
 }
 
 int main(int argc, char* argv[]){
+    message_proto a("Tom", "Hi");
     std::cout << "---------------------Chat Server---------------------" << std::endl;
     const char* server_port = "3940";
-    const char* server_hostname = "sigmawq";
-    if (argc == 3){
-        server_hostname = argv[1];
-        server_port = argv[2];
+    if (argc == 2){
+        server_port = argv[1];
     }
-    std::cout << "Using server host name: " << server_hostname << std::endl;
     std::cout << "Using server port: " << server_port << std::endl;
 
     Init(server_port);
